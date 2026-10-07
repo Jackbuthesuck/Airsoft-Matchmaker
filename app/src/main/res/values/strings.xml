@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">ASField</string>
+    <string name="title_match">Match</string>
+    <string name="title_players">Players</string>
+    <string name="title_groups">Groups &amp; Pairs</string>
+    <string name="action_reset_stats">Reset Stats</string>
+    <string name="generate_match">Generate 2v2 Match</string>
+    <string name="reroll_match">Re-roll / Shuffle</string>
+    <string name="finish_match">Finish Match</string>
+    <string name="team_alpha">Team Alpha (Red)</string>
+    <string name="team_bravo">Team Bravo (Blue)</string>
+    <string name="team_alpha_win">Alpha Wins</string>
+    <string name="team_bravo_win">Bravo Wins</string>
+    <string name="draw">Draw</string>
+    <string name="vs">VS</string>
+    <string name="add_player">Add Player</string>
+    <string name="add_group">Create Group / Pair</string>
+    <string name="active_players">Active Players</string>
+    <string name="match_history">Match History</string>
+    <string name="no_matches_yet">No matches generated yet. Tap above to pick 4 players for a 2v2 match!</string>
+    <string name="no_groups_yet">No groups or pairs created yet.</string>
+</resources>

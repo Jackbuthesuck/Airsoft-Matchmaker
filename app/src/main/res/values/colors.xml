@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tactical/Airsoft Theme Colors (Light Theme) -->
+    <color name="primary">#2E7D32</color>
+    <color name="primary_dark">#1B5E20</color>
+    <color name="primary_light">#4CAF50</color>
+    <color name="accent">#FF8F00</color>
+
+    <color name="team_alpha">#D32F2F</color>
+    <color name="team_alpha_light">#FFEBEE</color>
+    <color name="team_alpha_dark">#B71C1C</color>
+
+    <color name="team_bravo">#1976D2</color>
+    <color name="team_bravo_light">#E3F2FD</color>
+    <color name="team_bravo_dark">#0D47A1</color>
+
+    <color name="surface_card">#FFFFFF</color>
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#666666</color>
+    <color name="card_stroke">#E0E0E0</color>
+    <color name="divider">#BDBDBD</color>
+
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
