@@ -41,6 +41,7 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
         super.onViewCreated(view, savedInstanceState)
         repository = AppRepository.getInstance(requireContext())
         repository.addListener(this)
+        selectedTeamSize = repository.getPreferredTeamSize()
 
         setupButtons()
         setupMatchSizeSelector()
@@ -81,7 +82,7 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
     }
 
     private fun setupMatchSizeSelector() {
-        binding.toggleMatchSize.check(R.id.btn_size_2v2)
+        binding.toggleMatchSize.check(sizeButtonId(selectedTeamSize))
         binding.toggleMatchSize.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
             selectedTeamSize = when (checkedId) {
@@ -90,6 +91,7 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
                 R.id.btn_size_4v4 -> 4
                 else -> 2
             }
+            repository.savePreferredTeamSize(selectedTeamSize)
             repository.getCurrentMatch()?.let {
                 selectedTeamSize = it.team1PlayerIds.size
                 binding.toggleMatchSize.check(
@@ -101,6 +103,15 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
                     }
                 )
             }
+        }
+    }
+
+    private fun sizeButtonId(teamSize: Int): Int {
+        return when (teamSize.coerceIn(1, 4)) {
+            1 -> R.id.btn_size_1v1
+            3 -> R.id.btn_size_3v3
+            4 -> R.id.btn_size_4v4
+            else -> R.id.btn_size_2v2
         }
     }
 
@@ -116,7 +127,8 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
             players,
             groups,
             selectedTeamSize,
-            currentMatchIds
+            currentMatchIds,
+            repository.getMatchHistory()
         )) {
             is Matchmaker.MatchmakingResult.Success -> {
                 repository.saveCurrentMatch(result.match)
@@ -302,14 +314,7 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
             binding.btnManualMatch.text = "Adjust Selected Players"
             val currentTeamSize = currentMatch.team1PlayerIds.size
             selectedTeamSize = currentTeamSize
-            binding.toggleMatchSize.check(
-                when (currentTeamSize) {
-                    1 -> R.id.btn_size_1v1
-                    3 -> R.id.btn_size_3v3
-                    4 -> R.id.btn_size_4v4
-                    else -> R.id.btn_size_2v2
-                }
-            )
+            binding.toggleMatchSize.check(sizeButtonId(currentTeamSize))
             binding.tvCurrentMatchTitle.text = "CURRENT ${currentTeamSize}v${currentTeamSize} MATCH"
 
             val pMap = players.associateBy { it.id }
@@ -323,6 +328,8 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
             binding.btnWinBravo.isEnabled = complete
             binding.btnDraw.isEnabled = complete
         } else {
+            selectedTeamSize = repository.getPreferredTeamSize()
+            binding.toggleMatchSize.check(sizeButtonId(selectedTeamSize))
             binding.layoutCurrentMatch.visibility = View.GONE
             binding.toggleMatchSize.isEnabled = true
             binding.btnCancelMatch.visibility = View.GONE
@@ -367,7 +374,7 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
             container.addView(name, nameParams)
 
             val stats = TextView(requireContext()).apply {
-                text = if (playerId.isBlank()) "Choose a player" else "${player?.matchesPlayed ?: 0} all-time matches"
+                text = if (playerId.isBlank()) "Choose a player" else "${player?.sessionMatchesPlayed ?: 0} session matches"
                 setTextColor(requireContext().getColor(R.color.text_secondary))
                 textSize = 12f
             }

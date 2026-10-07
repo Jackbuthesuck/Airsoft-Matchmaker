@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.wazuhonde.asfield.model.AirsoftMatch
+import com.wazuhonde.asfield.model.ActivityEvent
 import com.wazuhonde.asfield.model.MatchResult
 import com.wazuhonde.asfield.model.Player
 import com.wazuhonde.asfield.model.PlayerGroup
@@ -58,6 +59,14 @@ class AppRepository private constructor(context: Context) {
         notifyDataChanged()
     }
 
+    fun getPreferredTeamSize(): Int {
+        return prefs.getInt(KEY_PREFERRED_TEAM_SIZE, 2).coerceIn(1, 4)
+    }
+
+    fun savePreferredTeamSize(teamSize: Int) {
+        prefs.edit().putInt(KEY_PREFERRED_TEAM_SIZE, teamSize.coerceIn(1, 4)).apply()
+    }
+
     fun addPlayer(name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
@@ -93,26 +102,31 @@ class AppRepository private constructor(context: Context) {
 
     fun togglePlayerPresence(playerId: String) {
         val currentPlayers = getPlayers()
-        val returningSessionBaseline = currentPlayers
-            .filter { it.id != playerId && it.isPresent }
-            .minOfOrNull { it.sessionMatchesPlayed } ?: 0
+        val changedPlayer = currentPlayers.find { it.id == playerId }
         val players = currentPlayers.map {
             if (it.id == playerId) {
-                val becomingActive = !it.isPresent
-                if (becomingActive) {
+                val becomingInactive = it.isPresent
+                if (becomingInactive) {
                     it.copy(
-                        isPresent = true,
-                        sessionMatchesPlayed = returningSessionBaseline,
+                        isPresent = false,
+                        sessionMatchesPlayed = 0,
                         sessionWins = 0,
                         sessionLosses = 0,
                         sessionDraws = 0
                     )
                 } else {
-                    it.copy(isPresent = false)
+                    it.copy(isPresent = true)
                 }
             } else it
         }
         savePlayers(players)
+        changedPlayer?.let {
+            recordPresenceActivity(
+                playerId = it.id,
+                message = if (it.isPresent) "${it.name} left the session" else "${it.name} joined the session",
+                kind = if (it.isPresent) PRESENCE_LEFT else PRESENCE_JOINED
+            )
+        }
     }
 
     fun resetTodayStats() {
@@ -122,23 +136,38 @@ class AppRepository private constructor(context: Context) {
                 dayMatchesPlayed = 0,
                 dayWins = 0,
                 dayLosses = 0,
-                dayDraws = 0
+                dayDraws = 0,
+                sessionMatchesPlayed = 0,
+                sessionWins = 0,
+                sessionLosses = 0,
+                sessionDraws = 0
             )
         }
         savePlayers(players)
+        addActivityEvent("Today's stats and current session were reset")
     }
 
     fun resetWeekStats() {
         val players = getPlayers().map {
             it.copy(
+                statsDayKey = currentDayKey(),
+                dayMatchesPlayed = 0,
+                dayWins = 0,
+                dayLosses = 0,
+                dayDraws = 0,
                 statsWeekKey = currentWeekKey(),
                 weekMatchesPlayed = 0,
                 weekWins = 0,
                 weekLosses = 0,
-                weekDraws = 0
+                weekDraws = 0,
+                sessionMatchesPlayed = 0,
+                sessionWins = 0,
+                sessionLosses = 0,
+                sessionDraws = 0
             )
         }
         savePlayers(players)
+        addActivityEvent("This week's, today's, and current-session stats were reset")
     }
 
     // Groups
@@ -200,6 +229,57 @@ class AppRepository private constructor(context: Context) {
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    fun getActivityHistory(): List<ActivityEvent> {
+        val json = prefs.getString(KEY_ACTIVITY_HISTORY, null) ?: return emptyList()
+        val type = object : TypeToken<List<ActivityEvent>>() {}.type
+        return try {
+            gson.fromJson(json, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun addActivityEvent(message: String) {
+        val events = getActivityHistory().toMutableList()
+        events.add(0, ActivityEvent(message = message))
+        saveActivityEvents(events)
+    }
+
+    private fun recordPresenceActivity(playerId: String, message: String, kind: String) {
+        val events = getActivityHistory().toMutableList()
+        val latestCompletedMatch = prefs.getLong(
+            KEY_LAST_COMPLETED_MATCH_AT,
+            getMatchHistory().maxOfOrNull { it.timestamp } ?: 0L
+        )
+        val previousPresenceIndex = events.indexOfFirst {
+            it.subjectId == playerId && it.timestamp > latestCompletedMatch
+        }
+
+        if (previousPresenceIndex >= 0 && events[previousPresenceIndex].kind != kind) {
+            events.removeAt(previousPresenceIndex)
+            saveActivityEvents(events)
+            return
+        }
+
+        events.add(
+            0,
+            ActivityEvent(
+                message = message,
+                subjectId = playerId,
+                kind = kind
+            )
+        )
+        saveActivityEvents(events)
+    }
+
+    private fun saveActivityEvents(events: List<ActivityEvent>) {
+        prefs.edit().putString(
+            KEY_ACTIVITY_HISTORY,
+            gson.toJson(events.take(MAX_ACTIVITY_EVENTS))
+        ).apply()
+        notifyDataChanged()
     }
 
     fun saveMatchHistory(history: List<AirsoftMatch>) {
@@ -264,6 +344,7 @@ class AppRepository private constructor(context: Context) {
         history.add(0, completedMatch)
         saveMatchHistory(history)
 
+        prefs.edit().putLong(KEY_LAST_COMPLETED_MATCH_AT, System.currentTimeMillis()).apply()
         saveCurrentMatch(null)
     }
 
@@ -318,6 +399,12 @@ class AppRepository private constructor(context: Context) {
         private const val KEY_GROUPS = "key_groups"
         private const val KEY_CURRENT_MATCH = "key_current_match"
         private const val KEY_MATCH_HISTORY = "key_match_history"
+        private const val KEY_ACTIVITY_HISTORY = "key_activity_history"
+        private const val KEY_PREFERRED_TEAM_SIZE = "key_preferred_team_size"
+        private const val KEY_LAST_COMPLETED_MATCH_AT = "key_last_completed_match_at"
+        private const val MAX_ACTIVITY_EVENTS = 200
+        private const val PRESENCE_JOINED = "presence_joined"
+        private const val PRESENCE_LEFT = "presence_left"
 
         @Volatile
         private var INSTANCE: AppRepository? = null

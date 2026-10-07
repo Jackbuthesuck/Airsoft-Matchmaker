@@ -95,6 +95,31 @@ class MatchmakerTest {
     }
 
     @Test
+    fun testLowestSessionTotalBeatsEvenButAlreadyPlayedPair() {
+        val players = listOf(
+            Player(id = "A", name = "A", sessionMatchesPlayed = 1),
+            Player(id = "B", name = "B", sessionMatchesPlayed = 1),
+            Player(id = "C", name = "C", sessionMatchesPlayed = 0)
+        )
+        val opposingGroup = PlayerGroup(
+            name = "Opponents",
+            playerIds = listOf("A", "B"),
+            rule = GroupRule.OPPOSING_TEAMS
+        )
+
+        val result = matchmaker.generate2v2Match(
+            allPlayers = players,
+            groups = listOf(opposingGroup),
+            teamSize = 1
+        )
+
+        assertTrue(result is Matchmaker.MatchmakingResult.Success)
+        val selected = (result as Matchmaker.MatchmakingResult.Success).match
+            .let { it.team1PlayerIds + it.team2PlayerIds }
+        assertTrue("The unused player should be selected", selected.contains("C"))
+    }
+
+    @Test
     fun testStackedSameMatchAndOpposingRules() {
         val players = listOf(
             Player(id = "A", name = "A"),

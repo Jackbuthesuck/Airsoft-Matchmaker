@@ -3,14 +3,14 @@
     <item
         android:id="@+id/nav_match"
         android:icon="@drawable/ic_match"
-        android:title="2v2 Match" />
+        android:title="@string/title_match" />
     <item
         android:id="@+id/nav_players"
         android:icon="@drawable/ic_people"
         android:title="Manage" />
     <item
         android:id="@+id/nav_stats"
-        android:icon="@drawable/ic_match"
+        android:icon="@drawable/ic_stats"
         android:title="Stats" />
     <item
         android:id="@+id/nav_history"

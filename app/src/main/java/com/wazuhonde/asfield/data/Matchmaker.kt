@@ -17,7 +17,8 @@ class Matchmaker {
         allPlayers: List<Player>,
         groups: List<PlayerGroup>,
         teamSize: Int = 2,
-        excludedPlayerIds: Set<String> = emptySet()
+        excludedPlayerIds: Set<String> = emptySet(),
+        recentHistory: List<AirsoftMatch> = emptyList()
     ): MatchmakingResult {
         val safeTeamSize = teamSize.coerceIn(1, 4)
         val requiredPlayers = safeTeamSize * 2
@@ -35,51 +36,88 @@ class Matchmaker {
 
         data class MatchCandidate(
             val players: List<Player>,
+            val highestMatchCount: Int,
+            val matchCountSpread: Int,
+            val matchCountVariance: Long,
             val matchCountSum: Int,
+            val recentRepeatPenalty: Int,
             val groupBonus: Int,
             val validTeamSplits: List<Pair<List<String>, List<String>>>
         )
 
-        val candidates = mutableListOf<MatchCandidate>()
+        fun findCandidates(enforcedGroups: List<PlayerGroup>): List<MatchCandidate> {
+            val candidates = mutableListOf<MatchCandidate>()
 
-        for (fourPlayers in player4Combinations) {
-            val fourIds = fourPlayers.map { it.id }.toSet()
-            val matchCountSum = fourPlayers.sumOf { it.sessionMatchesPlayed }
+            for (fourPlayers in player4Combinations) {
+                val fourIds = fourPlayers.map { it.id }.toSet()
+                val matchCounts = fourPlayers.map { it.sessionMatchesPlayed }
+                val lowestMatchCount = matchCounts.minOrNull() ?: 0
+                val highestMatchCount = matchCounts.maxOrNull() ?: 0
+                val matchCountSum = fourPlayers.sumOf { it.sessionMatchesPlayed }
+                val averageCount = matchCountSum.toLong()
+                val matchCountVariance = matchCounts.sumOf { count ->
+                    val difference = count.toLong() * matchCounts.size - averageCount
+                    difference * difference
+                }
 
-            var groupBonus = 0
-            for (group in groups) {
-                val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
-                if (groupPresentIds.size >= 2) {
-                    val selectedInFour = groupPresentIds.filter { fourIds.contains(it) }
-                    if (isSameMatchConstraint(group, groupPresentIds.size, safeTeamSize)) {
-                        if (selectedInFour.size >= 2) {
-                            groupBonus += 10
-                        } else if (selectedInFour.size == 1 && groupPresentIds.size > selectedInFour.size) {
-                            groupBonus -= 5
+                var groupBonus = 0
+                for (group in enforcedGroups) {
+                    val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
+                    if (groupPresentIds.size >= 2) {
+                        val selectedInFour = groupPresentIds.filter { fourIds.contains(it) }
+                        if (isSameMatchConstraint(group, groupPresentIds.size, safeTeamSize)) {
+                            if (selectedInFour.size >= 2) {
+                                groupBonus += 10
+                            } else if (selectedInFour.size == 1 && groupPresentIds.size > selectedInFour.size) {
+                                groupBonus -= 5
+                            }
                         }
                     }
                 }
-            }
 
-            val selectedIds = fourPlayers.map { it.id }.toSet()
-            val respectsSameMatchGroups = groups.all { group ->
-                val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
-                if (!isSameMatchConstraint(group, groupPresentIds.size, safeTeamSize)) {
-                    true
+                val selectedIds = fourPlayers.map { it.id }.toSet()
+                val recentRepeatPenalty = recentLineupPenalty(selectedIds, recentHistory)
+                val respectsSameMatchGroups = enforcedGroups.all { group ->
+                    val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
+                    if (!isSameMatchConstraint(group, groupPresentIds.size, safeTeamSize)) {
+                        true
+                    } else {
+                        val selectedCount = groupPresentIds.count { it in selectedIds }
+                        groupPresentIds.size > requiredPlayers ||
+                            selectedCount == 0 || selectedCount == groupPresentIds.size
+                    }
+                }
+                val validSplits = if (respectsSameMatchGroups) {
+                    getValidTeamSplits(fourPlayers.map { it.id }, safeTeamSize, enforcedGroups)
                 } else {
-                    val selectedCount = groupPresentIds.count { it in selectedIds }
-                    groupPresentIds.size > requiredPlayers ||
-                        selectedCount == 0 || selectedCount == groupPresentIds.size
+                    emptyList()
+                }
+                if (validSplits.isNotEmpty()) {
+                    candidates.add(
+                        MatchCandidate(
+                            players = fourPlayers,
+                            highestMatchCount = highestMatchCount,
+                            matchCountSpread = highestMatchCount - lowestMatchCount,
+                            matchCountVariance = matchCountVariance,
+                            matchCountSum = matchCountSum,
+                            recentRepeatPenalty = recentRepeatPenalty,
+                            groupBonus = groupBonus,
+                            validTeamSplits = validSplits
+                        )
+                    )
                 }
             }
-            val validSplits = if (respectsSameMatchGroups) {
-                getValidTeamSplits(fourPlayers.map { it.id }, safeTeamSize, groups)
-            } else {
-                emptyList()
-            }
-            if (validSplits.isNotEmpty()) {
-                candidates.add(MatchCandidate(fourPlayers, matchCountSum, groupBonus, validSplits))
-            }
+            return candidates
+        }
+
+        var enforcedGroups = groups
+        var candidates = findCandidates(enforcedGroups)
+        val ignoredGroups = mutableListOf<PlayerGroup>()
+        while (candidates.isEmpty() && enforcedGroups.isNotEmpty()) {
+            val ignoredGroup = enforcedGroups.random()
+            ignoredGroups += ignoredGroup
+            enforcedGroups = enforcedGroups - ignoredGroup
+            candidates = findCandidates(enforcedGroups)
         }
 
         if (candidates.isEmpty()) {
@@ -90,13 +128,26 @@ class Matchmaker {
             return MatchmakingResult.Error("Could not generate match with active players.")
         }
 
-        // Shuffle first to randomize ties safely without violating Timsort comparator contract
+        // Shuffle first to randomize exact ties safely without violating Timsort's comparator contract.
+        // Fairness prioritizes total session appearances first, then protects against
+        // one player being overused and finally compares spread and variance.
         val shuffledCandidates = candidates.shuffled()
-        val sortedCandidates = shuffledCandidates.sortedBy { it.matchCountSum - it.groupBonus }
-
-        val topScore = sortedCandidates.first().matchCountSum - sortedCandidates.first().groupBonus
+        val sortedCandidates = shuffledCandidates.sortedWith(
+            compareBy<MatchCandidate> { it.matchCountSum }
+                .thenBy { it.highestMatchCount }
+                .thenBy { it.matchCountSpread }
+                .thenBy { it.matchCountVariance }
+                .thenBy { it.recentRepeatPenalty }
+                .thenByDescending { it.groupBonus }
+        )
+        val bestCandidate = sortedCandidates.first()
         val bestCandidates = sortedCandidates.filter {
-            (it.matchCountSum - it.groupBonus) <= topScore + 1
+            it.matchCountSum == bestCandidate.matchCountSum &&
+            it.highestMatchCount == bestCandidate.highestMatchCount &&
+                it.matchCountSpread == bestCandidate.matchCountSpread &&
+                it.matchCountVariance == bestCandidate.matchCountVariance &&
+                it.recentRepeatPenalty == bestCandidate.recentRepeatPenalty &&
+                it.groupBonus == bestCandidate.groupBonus
         }
         val chosenCandidate = bestCandidates.random()
         val chosenSplit = chosenCandidate.validTeamSplits.random()
@@ -112,7 +163,12 @@ class Matchmaker {
             team2PlayerIds = team2
         )
 
-        return MatchmakingResult.Success(match)
+        val message = if (ignoredGroups.isEmpty()) {
+            null
+        } else {
+            "Conflicting rule(s) were randomly relaxed: ${ignoredGroups.joinToString { it.name }}."
+        }
+        return MatchmakingResult.Success(match, message)
     }
 
     private fun getValidTeamSplits(
@@ -209,6 +265,17 @@ class Matchmaker {
         return Pair(match, "Fallback match generated.")
     }
 
+    private fun recentLineupPenalty(
+        selectedIds: Set<String>,
+        recentHistory: List<AirsoftMatch>
+    ): Int {
+        val recentMatches = recentHistory.take(10)
+        return recentMatches.mapIndexed { index, historyMatch ->
+            val historyIds = (historyMatch.team1PlayerIds + historyMatch.team2PlayerIds).toSet()
+            if (historyIds == selectedIds) recentMatches.size - index else 0
+        }.sum()
+    }
+
     private fun <T> generateCombinations(list: List<T>, k: Int): List<List<T>> {
         val result = mutableListOf<List<T>>()
         fun helper(start: Int, current: MutableList<T>) {
@@ -225,4 +292,5 @@ class Matchmaker {
         helper(0, mutableListOf())
         return result
     }
+
 }

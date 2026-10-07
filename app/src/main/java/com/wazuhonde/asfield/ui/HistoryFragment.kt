@@ -17,6 +17,7 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
     private val binding get() = _binding!!
     private lateinit var repository: AppRepository
     private lateinit var adapter: MatchHistoryAdapter
+    private lateinit var activityAdapter: ActivityEventAdapter
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -45,10 +46,13 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
         )
         binding.rvMatchHistory.layoutManager = LinearLayoutManager(requireContext())
         binding.rvMatchHistory.adapter = adapter
+        activityAdapter = ActivityEventAdapter()
+        binding.rvActivityHistory.layoutManager = LinearLayoutManager(requireContext())
+        binding.rvActivityHistory.adapter = activityAdapter
         binding.btnResetTodayStats.setOnClickListener {
             AlertDialog.Builder(requireContext())
                 .setTitle("Reset Today's Stats?")
-                .setMessage("This clears today's counts and results only. All-time stats, this week's stats, players, groups, and history stay safe.")
+                .setMessage("This clears today's and current-session counts. This week's and all-time stats, players, groups, and history stay safe.")
                 .setPositiveButton("Reset") { _, _ ->
                     repository.resetTodayStats()
                     Toast.makeText(requireContext(), "Today's stats reset", Toast.LENGTH_SHORT).show()
@@ -59,7 +63,7 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
         binding.btnResetWeekStats.setOnClickListener {
             AlertDialog.Builder(requireContext())
                 .setTitle("Reset This Week's Stats?")
-                .setMessage("This clears this week's counts and results only. All-time stats, today's stats, players, groups, and history stay safe.")
+                .setMessage("This clears this week's, today's, and current-session counts. All-time stats, players, groups, and history stay safe.")
                 .setPositiveButton("Reset") { _, _ ->
                     repository.resetWeekStats()
                     Toast.makeText(requireContext(), "This week's stats reset", Toast.LENGTH_SHORT).show()
@@ -75,6 +79,10 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
         binding.tvEmptyHistory.visibility = if (history.isEmpty()) View.VISIBLE else View.GONE
         binding.rvMatchHistory.visibility = if (history.isEmpty()) View.GONE else View.VISIBLE
         if (history.isNotEmpty()) adapter.submitList(history)
+        val activity = repository.getActivityHistory()
+        binding.tvEmptyActivity.visibility = if (activity.isEmpty()) View.VISIBLE else View.GONE
+        binding.rvActivityHistory.visibility = if (activity.isEmpty()) View.GONE else View.VISIBLE
+        activityAdapter.submitList(activity)
     }
 
     override fun onDataChanged() {
