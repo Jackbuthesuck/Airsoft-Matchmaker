@@ -13,7 +13,14 @@ class Matchmaker {
         data class Error(val reason: String) : MatchmakingResult()
     }
 
-    fun generate2v2Match(
+    /**
+     * Builds one balanced match from the currently present players.
+     *
+     * Team-size selection is handled by the caller, so this supports 1v1 through 4v4.
+     * Group constraints are enforced when possible; contradictory rules are relaxed one
+     * at a time rather than allowing a bad comparator or an impossible match to crash the app.
+     */
+    fun generateMatch(
         allPlayers: List<Player>,
         groups: List<PlayerGroup>,
         teamSize: Int = 2,
@@ -24,6 +31,8 @@ class Matchmaker {
         val requiredPlayers = safeTeamSize * 2
         val activePlayers = allPlayers.filter { it.isPresent }
         val replacements = activePlayers.filterNot { it.id in excludedPlayerIds }
+        // When enough replacements exist, do not immediately reuse players from the
+        // current match. If there are too few, use everyone so generation still works.
         val presentPlayers = if (replacements.size >= requiredPlayers) replacements else activePlayers
         if (presentPlayers.size < requiredPlayers) {
             return MatchmakingResult.Error("Need at least $requiredPlayers active players to create a ${safeTeamSize}v${safeTeamSize} match. Currently active: ${presentPlayers.size}")
@@ -31,11 +40,10 @@ class Matchmaker {
 
         val playerMap = presentPlayers.associateBy { it.id }
 
-        // Generate combinations of 4 players
+        // Consider every possible lineup of the required size before choosing one.
         val player4Combinations = generateCombinations(presentPlayers, requiredPlayers)
 
         data class MatchCandidate(
-            val players: List<Player>,
             val highestMatchCount: Int,
             val matchCountSpread: Int,
             val matchCountVariance: Long,
@@ -60,6 +68,8 @@ class Matchmaker {
                     difference * difference
                 }
 
+                // This is only a soft preference. Same-team/opposing constraints are
+                // checked later as hard split rules when the selected lineup permits it.
                 var groupBonus = 0
                 for (group in enforcedGroups) {
                     val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
@@ -87,6 +97,8 @@ class Matchmaker {
                             selectedCount == 0 || selectedCount == groupPresentIds.size
                     }
                 }
+                // A Same Team group larger than one team is treated as a same-match
+                // group; splitting it is unavoidable for a small team size.
                 val validSplits = if (respectsSameMatchGroups) {
                     getValidTeamSplits(fourPlayers.map { it.id }, safeTeamSize, enforcedGroups)
                 } else {
@@ -95,7 +107,6 @@ class Matchmaker {
                 if (validSplits.isNotEmpty()) {
                     candidates.add(
                         MatchCandidate(
-                            players = fourPlayers,
                             highestMatchCount = highestMatchCount,
                             matchCountSpread = highestMatchCount - lowestMatchCount,
                             matchCountVariance = matchCountVariance,
@@ -143,7 +154,7 @@ class Matchmaker {
         val bestCandidate = sortedCandidates.first()
         val bestCandidates = sortedCandidates.filter {
             it.matchCountSum == bestCandidate.matchCountSum &&
-            it.highestMatchCount == bestCandidate.highestMatchCount &&
+                it.highestMatchCount == bestCandidate.highestMatchCount &&
                 it.matchCountSpread == bestCandidate.matchCountSpread &&
                 it.matchCountVariance == bestCandidate.matchCountVariance &&
                 it.recentRepeatPenalty == bestCandidate.recentRepeatPenalty &&

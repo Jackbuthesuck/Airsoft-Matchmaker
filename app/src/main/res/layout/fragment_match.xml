@@ -131,7 +131,7 @@
                                 android:id="@+id/tv_current_match_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="CURRENT 2v2 MATCH"
+                android:text="CURRENT MATCH"
                 android:textColor="@color/primary"
                 android:textSize="14sp"
                 android:textStyle="bold"

@@ -92,6 +92,12 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
                 else -> 2
             }
             repository.savePreferredTeamSize(selectedTeamSize)
+            if (repository.getCurrentMatch() == null) {
+                binding.btnGenerateMatch.text = getString(
+                    R.string.generate_match_for_size,
+                    selectedTeamSize
+                )
+            }
             repository.getCurrentMatch()?.let {
                 selectedTeamSize = it.team1PlayerIds.size
                 binding.toggleMatchSize.check(
@@ -123,7 +129,7 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
             it.team1PlayerIds.toSet() + it.team2PlayerIds
         } ?: emptySet()
 
-        when (val result = matchmaker.generate2v2Match(
+        when (val result = matchmaker.generateMatch(
             players,
             groups,
             selectedTeamSize,
@@ -333,7 +339,10 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
             binding.layoutCurrentMatch.visibility = View.GONE
             binding.toggleMatchSize.isEnabled = true
             binding.btnCancelMatch.visibility = View.GONE
-            binding.btnGenerateMatch.text = "Generate ${selectedTeamSize}v${selectedTeamSize} Match"
+            binding.btnGenerateMatch.text = getString(
+                R.string.generate_match_for_size,
+                selectedTeamSize
+            )
             binding.btnManualMatch.text = "Choose Players Manually"
             binding.btnWinAlpha.isEnabled = false
             binding.btnWinBravo.isEnabled = false

@@ -23,7 +23,7 @@ class StatsFragment : Fragment(), AppRepository.DataChangeListener {
     private var players = emptyList<Player>()
     private var period = Period.SESSION
     private var sortField = SortField.NAME
-    private var ascending = true
+    private var ascending = false
 
     private enum class Period { SESSION, TODAY, WEEK, ALL_TIME }
 
@@ -51,6 +51,7 @@ class StatsFragment : Fragment(), AppRepository.DataChangeListener {
             SortField.entries.map { it.label }
         )
         binding.spinnerSort.setSelection(0)
+        binding.btnSortDirection.text = "Descending"
         binding.spinnerSort.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {

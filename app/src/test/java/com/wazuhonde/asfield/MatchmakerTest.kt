@@ -19,7 +19,7 @@ class MatchmakerTest {
             Player(id = "2", name = "P2"),
             Player(id = "3", name = "P3")
         )
-        val result = matchmaker.generate2v2Match(players, emptyList())
+        val result = matchmaker.generateMatch(players, emptyList())
         assertTrue(result is Matchmaker.MatchmakingResult.Error)
     }
 
@@ -32,7 +32,7 @@ class MatchmakerTest {
             Player(id = "4", name = "P4", sessionMatchesPlayed = 0),
             Player(id = "5", name = "P5", sessionMatchesPlayed = 0)
         )
-        val result = matchmaker.generate2v2Match(players, emptyList())
+        val result = matchmaker.generateMatch(players, emptyList())
         assertTrue(result is Matchmaker.MatchmakingResult.Success)
 
         val match = (result as Matchmaker.MatchmakingResult.Success).match
@@ -56,7 +56,7 @@ class MatchmakerTest {
             rule = GroupRule.SAME_TEAM
         )
 
-        val result = matchmaker.generate2v2Match(players, listOf(sameTeamGroup))
+        val result = matchmaker.generateMatch(players, listOf(sameTeamGroup))
         assertTrue(result is Matchmaker.MatchmakingResult.Success)
 
         val match = (result as Matchmaker.MatchmakingResult.Success).match
@@ -82,7 +82,7 @@ class MatchmakerTest {
             rule = GroupRule.OPPOSING_TEAMS
         )
 
-        val result = matchmaker.generate2v2Match(players, listOf(opposingGroup))
+        val result = matchmaker.generateMatch(players, listOf(opposingGroup))
         assertTrue(result is Matchmaker.MatchmakingResult.Success)
 
         val match = (result as Matchmaker.MatchmakingResult.Success).match
@@ -107,7 +107,7 @@ class MatchmakerTest {
             rule = GroupRule.OPPOSING_TEAMS
         )
 
-        val result = matchmaker.generate2v2Match(
+        val result = matchmaker.generateMatch(
             allPlayers = players,
             groups = listOf(opposingGroup),
             teamSize = 1
@@ -138,7 +138,7 @@ class MatchmakerTest {
             rule = GroupRule.OPPOSING_TEAMS
         )
 
-        val result = matchmaker.generate2v2Match(players, listOf(sameMatch, opposing))
+        val result = matchmaker.generateMatch(players, listOf(sameMatch, opposing))
         assertTrue(result is Matchmaker.MatchmakingResult.Success)
 
         val match = (result as Matchmaker.MatchmakingResult.Success).match

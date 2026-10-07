@@ -20,7 +20,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
-        android:text="No matches recorded yet."
+        android:text="No matches or activity recorded yet."
         android:textColor="@color/text_secondary"
         android:textSize="14sp" />
 
@@ -32,31 +32,6 @@
         android:layout_weight="1"
         tools:itemCount="3"
         tools:listitem="@layout/item_match_history" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:text="Activity Log"
-        android:textColor="@color/text_primary"
-        android:textSize="16sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/tv_empty_activity"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="No activity recorded yet."
-        android:textColor="@color/text_secondary"
-        android:textSize="13sp" />
-
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rv_activity_history"
-        android:layout_width="match_parent"
-        android:layout_height="96dp"
-        android:layout_marginTop="4dp"
-        tools:itemCount="3"
-        tools:listitem="@layout/item_activity_event" />
 
     <LinearLayout
         android:layout_width="match_parent"

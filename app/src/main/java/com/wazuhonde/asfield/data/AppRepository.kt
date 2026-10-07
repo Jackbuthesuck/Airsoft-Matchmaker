@@ -40,6 +40,8 @@ class AppRepository private constructor(context: Context) {
 
     // Players
     fun getPlayers(): List<Player> {
+        // Daily and weekly counters are derived periods. Normalize them whenever data
+        // is read so the statistics stay correct after the calendar changes overnight.
         val json = prefs.getString(KEY_PLAYERS, null) ?: return normalizePeriodStats(getSamplePlayers())
         val type = object : TypeToken<List<Player>>() {}.type
         val players = try {
@@ -101,6 +103,8 @@ class AppRepository private constructor(context: Context) {
     }
 
     fun togglePlayerPresence(playerId: String) {
+        // Leaving the session starts a clean session the next time this player returns.
+        // All-time, daily, and weekly totals intentionally remain untouched.
         val currentPlayers = getPlayers()
         val changedPlayer = currentPlayers.find { it.id == playerId }
         val players = currentPlayers.map {
@@ -130,6 +134,7 @@ class AppRepository private constructor(context: Context) {
     }
 
     fun resetTodayStats() {
+        // Session is nested inside the day, so a day reset also clears session counters.
         val players = getPlayers().map {
             it.copy(
                 statsDayKey = currentDayKey(),
@@ -148,6 +153,7 @@ class AppRepository private constructor(context: Context) {
     }
 
     fun resetWeekStats() {
+        // Resetting a larger period resets every smaller derived period below it.
         val players = getPlayers().map {
             it.copy(
                 statsDayKey = currentDayKey(),
@@ -253,6 +259,8 @@ class AppRepository private constructor(context: Context) {
             KEY_LAST_COMPLETED_MATCH_AT,
             getMatchHistory().maxOfOrNull { it.timestamp } ?: 0L
         )
+        // Presence changes cancel only within the current gap between completed games.
+        // A leave in the morning and a return after a game must remain visible.
         val previousPresenceIndex = events.indexOfFirst {
             it.subjectId == playerId && it.timestamp > latestCompletedMatch
         }
@@ -288,6 +296,8 @@ class AppRepository private constructor(context: Context) {
     }
 
     fun recordMatchOutcome(match: AirsoftMatch, result: MatchResult) {
+        // One completed game updates every retained period at once. The session matcher
+        // uses only the session fields; the other counters are for reporting/history.
         val completedMatch = match.copy(result = result)
 
         val players = getPlayers().toMutableList()

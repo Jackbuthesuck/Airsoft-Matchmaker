@@ -16,8 +16,7 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
     private var _binding: FragmentHistoryBinding? = null
     private val binding get() = _binding!!
     private lateinit var repository: AppRepository
-    private lateinit var adapter: MatchHistoryAdapter
-    private lateinit var activityAdapter: ActivityEventAdapter
+    private lateinit var adapter: HistoryTimelineAdapter
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -33,7 +32,7 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
         repository = AppRepository.getInstance(requireContext())
         repository.addListener(this)
 
-        adapter = MatchHistoryAdapter(
+        adapter = HistoryTimelineAdapter(
             getPlayerName = { id -> repository.getPlayers().find { it.id == id }?.name ?: "Unknown" },
             onDeleteMatch = { match ->
                 AlertDialog.Builder(requireContext())
@@ -46,9 +45,6 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
         )
         binding.rvMatchHistory.layoutManager = LinearLayoutManager(requireContext())
         binding.rvMatchHistory.adapter = adapter
-        activityAdapter = ActivityEventAdapter()
-        binding.rvActivityHistory.layoutManager = LinearLayoutManager(requireContext())
-        binding.rvActivityHistory.adapter = activityAdapter
         binding.btnResetTodayStats.setOnClickListener {
             AlertDialog.Builder(requireContext())
                 .setTitle("Reset Today's Stats?")
@@ -76,13 +72,11 @@ class HistoryFragment : Fragment(), AppRepository.DataChangeListener {
 
     private fun refreshUi() {
         val history = repository.getMatchHistory()
-        binding.tvEmptyHistory.visibility = if (history.isEmpty()) View.VISIBLE else View.GONE
-        binding.rvMatchHistory.visibility = if (history.isEmpty()) View.GONE else View.VISIBLE
-        if (history.isNotEmpty()) adapter.submitList(history)
         val activity = repository.getActivityHistory()
-        binding.tvEmptyActivity.visibility = if (activity.isEmpty()) View.VISIBLE else View.GONE
-        binding.rvActivityHistory.visibility = if (activity.isEmpty()) View.GONE else View.VISIBLE
-        activityAdapter.submitList(activity)
+        val isEmpty = history.isEmpty() && activity.isEmpty()
+        binding.tvEmptyHistory.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        binding.rvMatchHistory.visibility = if (isEmpty) View.GONE else View.VISIBLE
+        adapter.submitLists(history, activity)
     }
 
     override fun onDataChanged() {

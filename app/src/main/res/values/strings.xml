@@ -4,7 +4,8 @@
     <string name="title_players">Players</string>
     <string name="title_groups">Groups &amp; Pairs</string>
     <string name="action_reset_stats">Reset Stats</string>
-    <string name="generate_match">Generate 2v2 Match</string>
+    <string name="generate_match">Generate Match</string>
+    <string name="generate_match_for_size">Generate %1$dv%1$d Match</string>
     <string name="reroll_match">Re-roll / Shuffle</string>
     <string name="finish_match">Finish Match</string>
     <string name="team_alpha">Team Alpha (Red)</string>
@@ -17,6 +18,6 @@
     <string name="add_group">Create Group / Pair</string>
     <string name="active_players">Active Players</string>
     <string name="match_history">Match History</string>
-    <string name="no_matches_yet">No matches generated yet. Tap above to pick 4 players for a 2v2 match!</string>
+    <string name="no_matches_yet">No matches generated yet.</string>
     <string name="no_groups_yet">No groups or pairs created yet.</string>
 </resources>
