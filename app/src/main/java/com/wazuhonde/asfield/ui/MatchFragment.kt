@@ -11,13 +11,13 @@ import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
-import androidx.recyclerview.widget.LinearLayoutManager
 import com.wazuhonde.asfield.R
 import com.wazuhonde.asfield.data.AppRepository
 import com.wazuhonde.asfield.data.Matchmaker
 import com.wazuhonde.asfield.databinding.FragmentMatchBinding
 import com.wazuhonde.asfield.model.AirsoftMatch
 import com.wazuhonde.asfield.model.MatchResult
+import com.wazuhonde.asfield.model.Player
 
 class MatchFragment : Fragment(), AppRepository.DataChangeListener {
 
@@ -163,141 +163,167 @@ class MatchFragment : Fragment(), AppRepository.DataChangeListener {
     }
 
     private fun showAdjustMatchDialog(currentMatch: AirsoftMatch) {
-        val players = repository.getPlayers().filter { it.isPresent }
+        val activePlayers = repository.getPlayers().filter { it.isPresent }
         val teamSize = currentMatch.team1PlayerIds.size
-        val requiredPlayers = teamSize * 2
-        if (players.size < requiredPlayers) {
+        if (activePlayers.size < teamSize * 2) {
             Toast.makeText(requireContext(), "Not enough active players for this match size", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val playersById = players.associateBy { it.id }
-        val selectors = mutableListOf<Spinner>()
-        val selectorAdapters = mutableListOf<ArrayAdapter<String>>()
-        val slotOptions = mutableListOf<List<String>>()
-        val slotIds = (currentMatch.team1PlayerIds + currentMatch.team2PlayerIds)
-            .map { if (it in playersById) it else "" }
-            .toMutableList()
+        val playersById = activePlayers.associateBy { it.id }
+        val selection = PlayerSelection(
+            playersById = playersById,
+            selectedIds = (currentMatch.team1PlayerIds + currentMatch.team2PlayerIds)
+                .map { if (it in playersById) it else "" }.toMutableList()
+        )
+        AlertDialog.Builder(requireContext())
+            .setTitle("Adjust ${teamSize}v${teamSize} Players")
+            .setView(createSelectionContent(teamSize, selection))
+            .setPositiveButton("Save") { _, _ -> saveAdjustedMatch(selection.selectedIds, teamSize) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Current slot choices and the spinner controls that display them. */
+    private class PlayerSelection(
+        val playersById: Map<String, Player>,
+        val selectedIds: MutableList<String>
+    ) {
+        val spinners = mutableListOf<Spinner>()
+        val adapters = mutableListOf<ArrayAdapter<String>>()
+        val availableIds = mutableListOf<List<String>>()
+        var isUpdating = false
+    }
+
+    private fun createSelectionContent(teamSize: Int, selection: PlayerSelection): LinearLayout {
         val content = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 8, 48, 0)
         }
-
         content.addView(TextView(requireContext()).apply {
             text = "Edit each team slot directly. Clear a slot to choose a replacement. Players already assigned to another slot are hidden from each slot's list."
             textSize = 13f
             setTextColor(requireContext().getColor(R.color.text_secondary))
             setPadding(0, 0, 0, 8)
         })
-        var rebuilding = false
 
-        fun addTeamSlots(title: String, playerIds: List<String>) {
-            content.addView(TextView(requireContext()).apply {
-                text = title
-                textSize = 14f
-                setTextColor(requireContext().getColor(R.color.text_primary))
-                setPadding(0, 12, 0, 4)
-            })
-            playerIds.forEach {
-                val spinner = Spinner(requireContext())
-                val spinnerAdapter = ArrayAdapter<String>(
-                    requireContext(),
-                    android.R.layout.simple_spinner_item,
-                    mutableListOf()
-                ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-                spinner.adapter = spinnerAdapter
+        addTeamSlotRows(content, "TEAM ALPHA", 0, teamSize, selection)
+        addTeamSlotRows(content, "TEAM BRAVO", teamSize, teamSize, selection)
+        refreshSlotChoices(selection)
+        connectSlotListeners(selection)
+        return content
+    }
 
-                val clearButton = com.google.android.material.button.MaterialButton(requireContext()).apply {
-                    text = "Clear"
-                    setTextSize(11f)
-                    minimumWidth = 0
-                    setPadding(12, 0, 12, 0)
-                }
-                val row = LinearLayout(requireContext()).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = android.view.Gravity.CENTER_VERTICAL
-                }
-                row.addView(spinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(clearButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-                content.addView(row)
-                selectors.add(spinner)
-                selectorAdapters.add(spinnerAdapter)
-                slotOptions.add(emptyList())
-                val slotIndex = selectors.lastIndex
-                clearButton.setOnClickListener {
-                    if (!rebuilding) {
-                        slotIds[slotIndex] = ""
-                        rebuilding = true
-                        rebuildSlotOptions(selectors, selectorAdapters, slotOptions, slotIds, playersById)
-                        rebuilding = false
-                    }
-                }
+    private fun addTeamSlotRows(
+        content: LinearLayout,
+        teamName: String,
+        firstSlot: Int,
+        teamSize: Int,
+        selection: PlayerSelection
+    ) {
+        content.addView(TextView(requireContext()).apply {
+            text = teamName
+            textSize = 14f
+            setTextColor(requireContext().getColor(R.color.text_primary))
+            setPadding(0, 12, 0, 4)
+        })
+
+        repeat(teamSize) { teamSlot ->
+            val slotIndex = firstSlot + teamSlot
+            val spinner = createPlayerSpinner(selection)
+            val clearButton = com.google.android.material.button.MaterialButton(requireContext()).apply {
+                text = "Clear"
+                setTextSize(11f)
+                minimumWidth = 0
+                setPadding(12, 0, 12, 0)
             }
+            val row = LinearLayout(requireContext()).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(spinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(clearButton, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ))
+            }
+            content.addView(row)
+            clearButton.setOnClickListener { clearSlot(slotIndex, selection) }
         }
+    }
 
-        addTeamSlots("TEAM ALPHA", currentMatch.team1PlayerIds)
-        addTeamSlots("TEAM BRAVO", currentMatch.team2PlayerIds)
+    private fun createPlayerSpinner(selection: PlayerSelection): Spinner {
+        val adapter = ArrayAdapter<String>(
+            requireContext(),
+            android.R.layout.simple_spinner_item,
+            mutableListOf()
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
 
-        rebuildSlotOptions(selectors, selectorAdapters, slotOptions, slotIds, playersById)
-        selectors.forEachIndexed { slot, spinner ->
+        return Spinner(requireContext()).also { spinner ->
+            spinner.adapter = adapter
+            selection.spinners.add(spinner)
+            selection.adapters.add(adapter)
+            selection.availableIds.add(emptyList())
+        }
+    }
+
+    private fun clearSlot(slot: Int, selection: PlayerSelection) {
+        if (selection.isUpdating) return
+        selection.selectedIds[slot] = ""
+        refreshSlotChoices(selection)
+    }
+
+    /** Hide players already selected in other slots, then refresh every spinner. */
+    private fun refreshSlotChoices(selection: PlayerSelection) {
+        selection.isUpdating = true
+        selection.spinners.forEachIndexed { index, spinner ->
+            val usedElsewhere = selection.selectedIds
+                .filterIndexed { otherIndex, id -> otherIndex != index && id.isNotEmpty() }
+                .toSet()
+            val choices = listOf("") + selection.playersById.keys.filter { it !in usedElsewhere }
+            selection.availableIds[index] = choices
+            selection.adapters[index].apply {
+                clear()
+                addAll(choices.map { id ->
+                    if (id.isEmpty()) "Clear this slot" else selection.playersById[id]?.name ?: "Unknown"
+                })
+                notifyDataSetChanged()
+            }
+            spinner.setSelection(choices.indexOf(selection.selectedIds[index]).coerceAtLeast(0), false)
+        }
+        selection.isUpdating = false
+    }
+
+    private fun connectSlotListeners(selection: PlayerSelection) {
+        selection.spinners.forEachIndexed { slot, spinner ->
             spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
 
                 override fun onItemSelected(
                     parent: android.widget.AdapterView<*>?,
-                    view: android.view.View?,
+                    view: View?,
                     position: Int,
                     id: Long
                 ) {
-                    if (rebuilding) return
-                    slotIds[slot] = slotOptions[slot].getOrNull(position).orEmpty()
-                    rebuilding = true
-                    rebuildSlotOptions(selectors, selectorAdapters, slotOptions, slotIds, playersById)
-                    rebuilding = false
+                    if (selection.isUpdating) return
+                    selection.selectedIds[slot] = selection.availableIds[slot].getOrNull(position).orEmpty()
+                    refreshSlotChoices(selection)
                 }
             }
         }
-
-        AlertDialog.Builder(requireContext())
-            .setTitle("Adjust ${teamSize}v${teamSize} Players")
-            .setView(content)
-            .setPositiveButton("Save") { _, _ ->
-                if (slotIds.any { it.isEmpty() }) {
-                    Toast.makeText(requireContext(), "Fill every team slot before saving", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                val selectedIds = slotIds.toList()
-                repository.saveCurrentMatch(
-                    AirsoftMatch(
-                        team1PlayerIds = selectedIds.take(teamSize),
-                        team2PlayerIds = selectedIds.drop(teamSize)
-                    )
-                )
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
-    private fun rebuildSlotOptions(
-        selectors: List<Spinner>,
-        adapters: List<ArrayAdapter<String>>,
-        options: MutableList<List<String>>,
-        slotIds: List<String>,
-        playersById: Map<String, com.wazuhonde.asfield.model.Player>
-    ) {
-        selectors.forEachIndexed { index, spinner ->
-            val usedElsewhere = slotIds.filterIndexed { otherIndex, id ->
-                otherIndex != index && id.isNotEmpty()
-            }.toSet()
-            val availableIds = listOf("") + playersById.keys.filter { it !in usedElsewhere }
-            options[index] = availableIds
-            adapters[index].clear()
-            adapters[index].addAll(availableIds.map { id ->
-                if (id.isEmpty()) "— Clear this slot —" else playersById[id]?.name ?: "Unknown"
-            })
-            adapters[index].notifyDataSetChanged()
-            spinner.setSelection(availableIds.indexOf(slotIds[index]).coerceAtLeast(0), false)
+    private fun saveAdjustedMatch(selectedIds: List<String>, teamSize: Int) {
+        if (selectedIds.any { it.isEmpty() }) {
+            Toast.makeText(requireContext(), "Fill every team slot before saving", Toast.LENGTH_SHORT).show()
+            return
         }
+
+        repository.saveCurrentMatch(
+            AirsoftMatch(
+                team1PlayerIds = selectedIds.take(teamSize),
+                team2PlayerIds = selectedIds.drop(teamSize)
+            )
+        )
     }
 
     private fun recordCurrentMatchResult(result: MatchResult) {

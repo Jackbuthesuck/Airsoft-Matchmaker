@@ -14,11 +14,8 @@ class Matchmaker {
     }
 
     /**
-     * Builds one balanced match from the currently present players.
-     *
-     * Team-size selection is handled by the caller, so this supports 1v1 through 4v4.
-     * Group constraints are enforced when possible; contradictory rules are relaxed one
-     * at a time rather than allowing a bad comparator or an impossible match to crash the app.
+     * Creates a match in four steps: choose available players, find valid lineups,
+     * rank those lineups for fairness, then randomly split the chosen lineup into teams.
      */
     fun generateMatch(
         allPlayers: List<Player>,
@@ -28,122 +25,184 @@ class Matchmaker {
         recentHistory: List<AirsoftMatch> = emptyList()
     ): MatchmakingResult {
         val safeTeamSize = teamSize.coerceIn(1, 4)
-        val requiredPlayers = safeTeamSize * 2
-        val activePlayers = allPlayers.filter { it.isPresent }
-        val replacements = activePlayers.filterNot { it.id in excludedPlayerIds }
-        // When enough replacements exist, do not immediately reuse players from the
-        // current match. If there are too few, use everyone so generation still works.
-        val presentPlayers = if (replacements.size >= requiredPlayers) replacements else activePlayers
-        if (presentPlayers.size < requiredPlayers) {
-            return MatchmakingResult.Error("Need at least $requiredPlayers active players to create a ${safeTeamSize}v${safeTeamSize} match. Currently active: ${presentPlayers.size}")
-        }
-
-        val playerMap = presentPlayers.associateBy { it.id }
-
-        // Consider every possible lineup of the required size before choosing one.
-        val player4Combinations = generateCombinations(presentPlayers, requiredPlayers)
-
-        data class MatchCandidate(
-            val highestMatchCount: Int,
-            val matchCountSpread: Int,
-            val matchCountVariance: Long,
-            val matchCountSum: Int,
-            val recentRepeatPenalty: Int,
-            val groupBonus: Int,
-            val validTeamSplits: List<Pair<List<String>, List<String>>>
+        val requiredPlayerCount = safeTeamSize * 2
+        val availablePlayers = chooseAvailablePlayers(
+            allPlayers,
+            excludedPlayerIds,
+            requiredPlayerCount
         )
 
-        fun findCandidates(enforcedGroups: List<PlayerGroup>): List<MatchCandidate> {
-            val candidates = mutableListOf<MatchCandidate>()
-
-            for (fourPlayers in player4Combinations) {
-                val fourIds = fourPlayers.map { it.id }.toSet()
-                val matchCounts = fourPlayers.map { it.sessionMatchesPlayed }
-                val lowestMatchCount = matchCounts.minOrNull() ?: 0
-                val highestMatchCount = matchCounts.maxOrNull() ?: 0
-                val matchCountSum = fourPlayers.sumOf { it.sessionMatchesPlayed }
-                val averageCount = matchCountSum.toLong()
-                val matchCountVariance = matchCounts.sumOf { count ->
-                    val difference = count.toLong() * matchCounts.size - averageCount
-                    difference * difference
-                }
-
-                // This is only a soft preference. Same-team/opposing constraints are
-                // checked later as hard split rules when the selected lineup permits it.
-                var groupBonus = 0
-                for (group in enforcedGroups) {
-                    val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
-                    if (groupPresentIds.size >= 2) {
-                        val selectedInFour = groupPresentIds.filter { fourIds.contains(it) }
-                        if (isSameMatchConstraint(group, groupPresentIds.size, safeTeamSize)) {
-                            if (selectedInFour.size >= 2) {
-                                groupBonus += 10
-                            } else if (selectedInFour.size == 1 && groupPresentIds.size > selectedInFour.size) {
-                                groupBonus -= 5
-                            }
-                        }
-                    }
-                }
-
-                val selectedIds = fourPlayers.map { it.id }.toSet()
-                val recentRepeatPenalty = recentLineupPenalty(selectedIds, recentHistory)
-                val respectsSameMatchGroups = enforcedGroups.all { group ->
-                    val groupPresentIds = group.playerIds.filter { playerMap.containsKey(it) }
-                    if (!isSameMatchConstraint(group, groupPresentIds.size, safeTeamSize)) {
-                        true
-                    } else {
-                        val selectedCount = groupPresentIds.count { it in selectedIds }
-                        groupPresentIds.size > requiredPlayers ||
-                            selectedCount == 0 || selectedCount == groupPresentIds.size
-                    }
-                }
-                // A Same Team group larger than one team is treated as a same-match
-                // group; splitting it is unavoidable for a small team size.
-                val validSplits = if (respectsSameMatchGroups) {
-                    getValidTeamSplits(fourPlayers.map { it.id }, safeTeamSize, enforcedGroups)
-                } else {
-                    emptyList()
-                }
-                if (validSplits.isNotEmpty()) {
-                    candidates.add(
-                        MatchCandidate(
-                            highestMatchCount = highestMatchCount,
-                            matchCountSpread = highestMatchCount - lowestMatchCount,
-                            matchCountVariance = matchCountVariance,
-                            matchCountSum = matchCountSum,
-                            recentRepeatPenalty = recentRepeatPenalty,
-                            groupBonus = groupBonus,
-                            validTeamSplits = validSplits
-                        )
-                    )
-                }
-            }
-            return candidates
+        if (availablePlayers.size < requiredPlayerCount) {
+            return MatchmakingResult.Error(
+                "Need at least $requiredPlayerCount active players to create a ${safeTeamSize}v${safeTeamSize} match. Currently active: ${availablePlayers.size}"
+            )
         }
 
+        val searchResult = findCandidatesWithRelaxedGroups(
+            availablePlayers = availablePlayers,
+            groups = groups,
+            teamSize = safeTeamSize,
+            recentHistory = recentHistory
+        )
+
+        if (searchResult.candidates.isEmpty()) {
+            val fallbackMatch = createFallbackMatch(availablePlayers, safeTeamSize)
+                ?: return MatchmakingResult.Error("Could not generate match with active players.")
+            return MatchmakingResult.Success(
+                fallbackMatch,
+                "Match generated ignoring conflicting group constraints."
+            )
+        }
+
+        val chosenCandidate = chooseFairestCandidate(searchResult.candidates)
+        val chosenSplit = chosenCandidate.validTeamSplits.random()
+        val match = randomizeTeamSides(chosenSplit)
+        val message = searchResult.ignoredGroups
+            .takeIf { it.isNotEmpty() }
+            ?.let { "Conflicting rule(s) were randomly relaxed: ${it.joinToString { group -> group.name }}." }
+
+        return MatchmakingResult.Success(match, message)
+    }
+
+    /** Players from the current match are skipped when enough other active players exist. */
+    private fun chooseAvailablePlayers(
+        allPlayers: List<Player>,
+        excludedPlayerIds: Set<String>,
+        requiredPlayerCount: Int
+    ): List<Player> {
+        val activePlayers = allPlayers.filter { it.isPresent }
+        val playersNotInCurrentMatch = activePlayers.filterNot { it.id in excludedPlayerIds }
+        return if (playersNotInCurrentMatch.size >= requiredPlayerCount) {
+            playersNotInCurrentMatch
+        } else {
+            activePlayers
+        }
+    }
+
+    /** A candidate is one possible lineup, along with its fairness score and valid team splits. */
+    private data class MatchCandidate(
+        val highestMatchCount: Int,
+        val matchCountSpread: Int,
+        val matchCountVariance: Long,
+        val matchCountSum: Int,
+        val recentRepeatPenalty: Int,
+        val groupBonus: Int,
+        val validTeamSplits: List<Pair<List<String>, List<String>>>
+    )
+
+    private data class CandidateSearchResult(
+        val candidates: List<MatchCandidate>,
+        val ignoredGroups: List<PlayerGroup>
+    )
+
+    /** Retry the lineup search, dropping one random group rule each time it finds no solution. */
+    private fun findCandidatesWithRelaxedGroups(
+        availablePlayers: List<Player>,
+        groups: List<PlayerGroup>,
+        teamSize: Int,
+        recentHistory: List<AirsoftMatch>
+    ): CandidateSearchResult {
         var enforcedGroups = groups
-        var candidates = findCandidates(enforcedGroups)
+        var candidates = findCandidates(availablePlayers, enforcedGroups, teamSize, recentHistory)
         val ignoredGroups = mutableListOf<PlayerGroup>()
+
         while (candidates.isEmpty() && enforcedGroups.isNotEmpty()) {
-            val ignoredGroup = enforcedGroups.random()
-            ignoredGroups += ignoredGroup
-            enforcedGroups = enforcedGroups - ignoredGroup
-            candidates = findCandidates(enforcedGroups)
+            val groupToIgnore = enforcedGroups.random()
+            ignoredGroups += groupToIgnore
+            enforcedGroups = enforcedGroups - groupToIgnore
+            candidates = findCandidates(availablePlayers, enforcedGroups, teamSize, recentHistory)
         }
 
-        if (candidates.isEmpty()) {
-            val fallback = getRelaxedTeamSplits(presentPlayers, safeTeamSize)
-            if (fallback != null) {
-                return MatchmakingResult.Success(fallback.first, "Match generated ignoring conflicting group constraints.")
+        return CandidateSearchResult(candidates, ignoredGroups)
+    }
+
+    /** Try every possible lineup, keeping only those that can be split under the active rules. */
+    private fun findCandidates(
+        players: List<Player>,
+        groups: List<PlayerGroup>,
+        teamSize: Int,
+        recentHistory: List<AirsoftMatch>
+    ): List<MatchCandidate> {
+        val playerById = players.associateBy { it.id }
+        val requiredPlayerCount = teamSize * 2
+
+        return generateCombinations(players, requiredPlayerCount).mapNotNull { lineup ->
+            val playerIds = lineup.map { it.id }
+            val lineupIds = playerIds.toSet()
+
+            if (!includesWholeSameMatchGroups(lineupIds, playerById, groups, requiredPlayerCount, teamSize)) {
+                return@mapNotNull null
             }
-            return MatchmakingResult.Error("Could not generate match with active players.")
-        }
 
-        // Shuffle first to randomize exact ties safely without violating Timsort's comparator contract.
-        // Fairness prioritizes total session appearances first, then protects against
-        // one player being overused and finally compares spread and variance.
-        val shuffledCandidates = candidates.shuffled()
-        val sortedCandidates = shuffledCandidates.sortedWith(
+            val validSplits = getValidTeamSplits(playerIds, teamSize, groups)
+            if (validSplits.isEmpty()) return@mapNotNull null
+
+            val counts = lineup.map { it.sessionMatchesPlayed }
+            MatchCandidate(
+                highestMatchCount = counts.maxOrNull() ?: 0,
+                matchCountSpread = (counts.maxOrNull() ?: 0) - (counts.minOrNull() ?: 0),
+                matchCountVariance = calculateMatchCountVariance(counts),
+                matchCountSum = counts.sum(),
+                recentRepeatPenalty = recentLineupPenalty(lineupIds, recentHistory),
+                groupBonus = calculateGroupBonus(lineupIds, playerById, groups, teamSize),
+                validTeamSplits = validSplits
+            )
+        }
+    }
+
+    /** A Same Match rule cannot select only part of a group that fits in the lineup. */
+    private fun includesWholeSameMatchGroups(
+        lineupIds: Set<String>,
+        playerById: Map<String, Player>,
+        groups: List<PlayerGroup>,
+        requiredPlayerCount: Int,
+        teamSize: Int
+    ): Boolean {
+        return groups.all { group ->
+            val presentIds = group.playerIds.filter { it in playerById }
+            if (!isSameMatchConstraint(group, presentIds.size, teamSize)) {
+                true
+            } else {
+                val selectedCount = presentIds.count { it in lineupIds }
+                presentIds.size > requiredPlayerCount || selectedCount == 0 || selectedCount == presentIds.size
+            }
+        }
+    }
+
+    /** Groups add a small tie-breaking preference when multiple group members make the lineup. */
+    private fun calculateGroupBonus(
+        lineupIds: Set<String>,
+        playerById: Map<String, Player>,
+        groups: List<PlayerGroup>,
+        teamSize: Int
+    ): Int {
+        var bonus = 0
+        for (group in groups) {
+            val presentIds = group.playerIds.filter { it in playerById }
+            if (presentIds.size < 2 || !isSameMatchConstraint(group, presentIds.size, teamSize)) continue
+
+            val selectedCount = presentIds.count { it in lineupIds }
+            bonus += when {
+                selectedCount >= 2 -> 10
+                selectedCount == 1 && presentIds.size > selectedCount -> -5
+                else -> 0
+            }
+        }
+        return bonus
+    }
+
+    /** Scale the counts before comparing them so the variance stays an integer. */
+    private fun calculateMatchCountVariance(counts: List<Int>): Long {
+        val scaledAverage = counts.sum().toLong()
+        return counts.sumOf { count ->
+            val difference = count.toLong() * counts.size - scaledAverage
+            difference * difference
+        }
+    }
+
+    /** Lower scores mean a fairer lineup. Exact ties are selected randomly. */
+    private fun chooseFairestCandidate(candidates: List<MatchCandidate>): MatchCandidate {
+        val rankedCandidates = candidates.shuffled().sortedWith(
             compareBy<MatchCandidate> { it.matchCountSum }
                 .thenBy { it.highestMatchCount }
                 .thenBy { it.matchCountSpread }
@@ -151,105 +210,57 @@ class Matchmaker {
                 .thenBy { it.recentRepeatPenalty }
                 .thenByDescending { it.groupBonus }
         )
-        val bestCandidate = sortedCandidates.first()
-        val bestCandidates = sortedCandidates.filter {
-            it.matchCountSum == bestCandidate.matchCountSum &&
-                it.highestMatchCount == bestCandidate.highestMatchCount &&
-                it.matchCountSpread == bestCandidate.matchCountSpread &&
-                it.matchCountVariance == bestCandidate.matchCountVariance &&
-                it.recentRepeatPenalty == bestCandidate.recentRepeatPenalty &&
-                it.groupBonus == bestCandidate.groupBonus
-        }
-        val chosenCandidate = bestCandidates.random()
-        val chosenSplit = chosenCandidate.validTeamSplits.random()
-
-        val (team1, team2) = if (Random.nextBoolean()) {
-            Pair(chosenSplit.first, chosenSplit.second)
-        } else {
-            Pair(chosenSplit.second, chosenSplit.first)
-        }
-
-        val match = AirsoftMatch(
-            team1PlayerIds = team1,
-            team2PlayerIds = team2
-        )
-
-        val message = if (ignoredGroups.isEmpty()) {
-            null
-        } else {
-            "Conflicting rule(s) were randomly relaxed: ${ignoredGroups.joinToString { it.name }}."
-        }
-        return MatchmakingResult.Success(match, message)
+        val bestScore = rankedCandidates.first()
+        return rankedCandidates.filter { it.hasSameScoreAs(bestScore) }.random()
     }
 
+    private fun MatchCandidate.hasSameScoreAs(other: MatchCandidate): Boolean {
+        return matchCountSum == other.matchCountSum &&
+            highestMatchCount == other.highestMatchCount &&
+            matchCountSpread == other.matchCountSpread &&
+            matchCountVariance == other.matchCountVariance &&
+            recentRepeatPenalty == other.recentRepeatPenalty &&
+            groupBonus == other.groupBonus
+    }
+
+    /** Randomly choose which valid split is used and which side is called Team 1. */
+    private fun randomizeTeamSides(split: Pair<List<String>, List<String>>): AirsoftMatch {
+        val (teamOne, teamTwo) = if (Random.nextBoolean()) split else split.second to split.first
+        return AirsoftMatch(team1PlayerIds = teamOne, team2PlayerIds = teamTwo)
+    }
+
+    /** Generate unique team splits, then discard splits that break a group rule. */
     private fun getValidTeamSplits(
         playerIds: List<String>,
         teamSize: Int,
         groups: List<PlayerGroup>
     ): List<Pair<List<String>, List<String>>> {
-        val possibleSplits = mutableListOf<Pair<List<String>, List<String>>>()
-        val team1Indexes = mutableListOf<Int>()
-        fun buildSplits(start: Int) {
-            if (team1Indexes.size == teamSize) {
-                if (team1Indexes.contains(0)) {
-                    val team1Set = team1Indexes.toSet()
-                    val team1 = playerIds.filterIndexed { index, _ -> index in team1Set }
-                    val team2 = playerIds.filterIndexed { index, _ -> index !in team1Set }
-                    possibleSplits.add(team1 to team2)
-                }
-                return
+        val possibleSplits = generateCombinations(playerIds.indices.toList(), teamSize)
+            // Team 1 always contains the first player to avoid checking mirrored copies.
+            .filter { 0 in it }
+            .map { teamOneIndexes ->
+                val teamOneIndexSet = teamOneIndexes.toSet()
+                playerIds.filterIndexed { index, _ -> index in teamOneIndexSet } to
+                    playerIds.filterIndexed { index, _ -> index !in teamOneIndexSet }
             }
-            for (index in start until playerIds.size) {
-                team1Indexes.add(index)
-                buildSplits(index + 1)
-                team1Indexes.removeAt(team1Indexes.lastIndex)
+        val lineupIds = playerIds.toSet()
+
+        return possibleSplits.filter { (teamOne, teamTwo) ->
+            val teamOneIds = teamOne.toSet()
+            val teamTwoIds = teamTwo.toSet()
+            groups.all { group ->
+                val membersInLineup = group.playerIds.filter { it in lineupIds }
+                if (membersInLineup.size < 2) return@all true
+
+                when (group.rule) {
+                    GroupRule.SAME_TEAM -> membersInLineup.size > teamSize ||
+                        membersInLineup.all { it in teamOneIds } || membersInLineup.all { it in teamTwoIds }
+                    GroupRule.OPPOSING_TEAMS -> membersInLineup.any { it in teamOneIds } &&
+                        membersInLineup.any { it in teamTwoIds }
+                    GroupRule.SAME_MATCH -> true // Checked while choosing the lineup.
+                }
             }
         }
-        buildSplits(0)
-
-        val matchSet = playerIds.toSet()
-        val validSplits = mutableListOf<Pair<List<String>, List<String>>>()
-
-        for (split in possibleSplits) {
-            val team1Set = split.first.toSet()
-            val team2Set = split.second.toSet()
-
-            var isValid = true
-
-            for (group in groups) {
-                val membersInMatch = group.playerIds.filter { matchSet.contains(it) }
-                if (membersInMatch.size >= 2) {
-                    when (group.rule) {
-                        GroupRule.SAME_TEAM -> {
-                            if (membersInMatch.size <= teamSize) {
-                                val inTeam1 = membersInMatch.all { team1Set.contains(it) }
-                                val inTeam2 = membersInMatch.all { team2Set.contains(it) }
-                                if (!inTeam1 && !inTeam2) {
-                                    isValid = false
-                                }
-                            }
-                        }
-                        GroupRule.OPPOSING_TEAMS -> {
-                            val inTeam1Count = membersInMatch.count { team1Set.contains(it) }
-                            val inTeam2Count = membersInMatch.count { team2Set.contains(it) }
-                            if (inTeam1Count == 0 || inTeam2Count == 0) {
-                                isValid = false
-                            }
-                        }
-                        GroupRule.SAME_MATCH -> {
-                            // Handled in scoring
-                        }
-                    }
-                }
-                if (!isValid) break
-            }
-
-            if (isValid) {
-                validSplits.add(split)
-            }
-        }
-
-        return validSplits
     }
 
     private fun isSameMatchConstraint(
@@ -261,21 +272,19 @@ class Matchmaker {
             (group.rule == GroupRule.SAME_TEAM && presentMemberCount > teamSize)
     }
 
-    private fun getRelaxedTeamSplits(
-        presentPlayers: List<Player>,
-        teamSize: Int
-    ): Pair<AirsoftMatch, String>? {
-        val requiredPlayers = teamSize * 2
-        val selectedPlayers = presentPlayers.sortedBy { it.sessionMatchesPlayed }.take(requiredPlayers)
-        if (selectedPlayers.size < requiredPlayers) return null
-        val ids = selectedPlayers.map { it.id }.shuffled()
-        val match = AirsoftMatch(
-            team1PlayerIds = ids.take(teamSize),
-            team2PlayerIds = ids.drop(teamSize)
+    /** Last resort: make a fair lineup and split it without applying group rules. */
+    private fun createFallbackMatch(players: List<Player>, teamSize: Int): AirsoftMatch? {
+        val selectedPlayers = players.sortedBy { it.sessionMatchesPlayed }.take(teamSize * 2)
+        if (selectedPlayers.size < teamSize * 2) return null
+
+        val shuffledIds = selectedPlayers.map { it.id }.shuffled()
+        return AirsoftMatch(
+            team1PlayerIds = shuffledIds.take(teamSize),
+            team2PlayerIds = shuffledIds.drop(teamSize)
         )
-        return Pair(match, "Fallback match generated.")
     }
 
+    /** Penalize an exact repeat of any of the ten most recent lineups. */
     private fun recentLineupPenalty(
         selectedIds: Set<String>,
         recentHistory: List<AirsoftMatch>
@@ -287,21 +296,23 @@ class Matchmaker {
         }.sum()
     }
 
-    private fun <T> generateCombinations(list: List<T>, k: Int): List<List<T>> {
-        val result = mutableListOf<List<T>>()
-        fun helper(start: Int, current: MutableList<T>) {
-            if (current.size == k) {
-                result.add(ArrayList(current))
+    /** List every distinct group of k items selected from the input list. */
+    private fun <T> generateCombinations(items: List<T>, chooseCount: Int): List<List<T>> {
+        val combinations = mutableListOf<List<T>>()
+
+        fun addCombinations(startIndex: Int, current: MutableList<T>) {
+            if (current.size == chooseCount) {
+                combinations.add(current.toList())
                 return
             }
-            for (i in start until list.size) {
-                current.add(list[i])
-                helper(i + 1, current)
-                current.removeAt(current.size - 1)
+            for (index in startIndex until items.size) {
+                current.add(items[index])
+                addCombinations(index + 1, current)
+                current.removeAt(current.lastIndex)
             }
         }
-        helper(0, mutableListOf())
-        return result
-    }
 
+        addCombinations(0, mutableListOf())
+        return combinations
+    }
 }
